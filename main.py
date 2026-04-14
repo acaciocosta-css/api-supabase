@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from sqlalchemy import create_engine, text
 import os
 
@@ -12,10 +12,16 @@ engine = create_engine(
     max_overflow=10
 )
 
+# ===============================
+# TESTE
+# ===============================
 @app.get("/")
 def home():
     return {"status": "API ONLINE"}
 
+# ===============================
+# LISTAR TODAS AS TABELAS
+# ===============================
 @app.get("/tabelas")
 def listar_tabelas():
     with engine.connect() as conn:
@@ -23,16 +29,97 @@ def listar_tabelas():
             SELECT table_name
             FROM information_schema.tables
             WHERE table_schema='public'
+            ORDER BY table_name
         """))
         return [row[0] for row in result]
 
-TABELAS_PERMITIDAS = ["cad_projetos", "cad_canteiros", "cad_trechos"]
+# ===============================
+# VALIDAR SE TABELA EXISTE
+# ===============================
+def validar_tabela(conn, tabela):
+    result = conn.execute(text("""
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema='public'
+        AND table_name = :tabela
+    """), {"tabela": tabela}).fetchone()
 
+    if not result:
+        raise HTTPException(status_code=404, detail="Tabela não existe")
+
+# ===============================
+# GET (LISTAR)
+# ===============================
 @app.get("/{tabela}")
-def listar_dados(tabela: str):
-    if tabela not in TABELAS_PERMITIDAS:
-        raise HTTPException(status_code=403, detail="Tabela não permitida")
-
+def listar_dados(
+    tabela: str,
+    limite: int = Query(100, ge=1, le=1000)
+):
     with engine.connect() as conn:
-        result = conn.execute(text(f"SELECT * FROM {tabela} LIMIT 100"))
+        validar_tabela(conn, tabela)
+
+        result = conn.execute(
+            text(f"SELECT * FROM {tabela} LIMIT :limite"),
+            {"limite": limite}
+        )
+
         return [dict(row._mapping) for row in result]
+
+# ===============================
+# POST (INSERIR)
+# ===============================
+@app.post("/{tabela}")
+def inserir_dados(tabela: str, dados: dict):
+    with engine.connect() as conn:
+        validar_tabela(conn, tabela)
+
+        colunas = ", ".join(dados.keys())
+        valores = ", ".join([f":{k}" for k in dados.keys()])
+
+        query = text(f"""
+            INSERT INTO {tabela} ({colunas})
+            VALUES ({valores})
+        """)
+
+        with engine.begin() as trans:
+            trans.execute(query, dados)
+
+        return {"status": "inserido com sucesso"}
+
+# ===============================
+# PUT (ATUALIZAR)
+# ===============================
+@app.put("/{tabela}/{id}")
+def atualizar_dados(tabela: str, id: int, dados: dict):
+    with engine.connect() as conn:
+        validar_tabela(conn, tabela)
+
+        sets = ", ".join([f"{k} = :{k}" for k in dados.keys()])
+
+        query = text(f"""
+            UPDATE {tabela}
+            SET {sets}
+            WHERE id = :id
+        """)
+
+        dados["id"] = id
+
+        with engine.begin() as trans:
+            trans.execute(query, dados)
+
+        return {"status": "atualizado com sucesso"}
+
+# ===============================
+# DELETE
+# ===============================
+@app.delete("/{tabela}/{id}")
+def deletar_dados(tabela: str, id: int):
+    with engine.connect() as conn:
+        validar_tabela(conn, tabela)
+
+        query = text(f"DELETE FROM {tabela} WHERE id = :id")
+
+        with engine.begin() as trans:
+            trans.execute(query, {"id": id})
+
+        return {"status": "deletado com sucesso"}
