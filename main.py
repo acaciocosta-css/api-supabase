@@ -20,7 +20,7 @@ def home():
     return {"status": "API ONLINE"}
 
 # ===============================
-# LISTAR TODAS AS TABELAS
+# LISTAR TABELAS
 # ===============================
 @app.get("/tabelas")
 def listar_tabelas():
@@ -34,7 +34,7 @@ def listar_tabelas():
         return [row[0] for row in result]
 
 # ===============================
-# VALIDAR SE TABELA EXISTE
+# VALIDAR TABELA
 # ===============================
 def validar_tabela(conn, tabela):
     result = conn.execute(text("""
@@ -46,6 +46,24 @@ def validar_tabela(conn, tabela):
 
     if not result:
         raise HTTPException(status_code=404, detail="Tabela não existe")
+
+# ===============================
+# DESCOBRIR CHAVE PRIMÁRIA
+# ===============================
+def get_primary_key(conn, tabela):
+    result = conn.execute(text("""
+        SELECT kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+        WHERE tc.table_name = :tabela
+        AND tc.constraint_type = 'PRIMARY KEY'
+    """), {"tabela": tabela}).fetchone()
+
+    if not result:
+        raise HTTPException(status_code=400, detail="Tabela sem chave primária")
+
+    return result[0]
 
 # ===============================
 # GET (LISTAR)
@@ -90,16 +108,18 @@ def inserir_dados(tabela: str, dados: dict):
 # PUT (ATUALIZAR)
 # ===============================
 @app.put("/{tabela}/{id}")
-def atualizar_dados(tabela: str, id: int, dados: dict):
+def atualizar_dados(tabela: str, id: str, dados: dict):
     with engine.connect() as conn:
         validar_tabela(conn, tabela)
+
+        pk = get_primary_key(conn, tabela)
 
         sets = ", ".join([f"{k} = :{k}" for k in dados.keys()])
 
         query = text(f"""
             UPDATE {tabela}
             SET {sets}
-            WHERE id = :id
+            WHERE {pk} = :id
         """)
 
         dados["id"] = id
@@ -113,11 +133,16 @@ def atualizar_dados(tabela: str, id: int, dados: dict):
 # DELETE
 # ===============================
 @app.delete("/{tabela}/{id}")
-def deletar_dados(tabela: str, id: int):
+def deletar_dados(tabela: str, id: str):
     with engine.connect() as conn:
         validar_tabela(conn, tabela)
 
-        query = text(f"DELETE FROM {tabela} WHERE id = :id")
+        pk = get_primary_key(conn, tabela)
+
+        query = text(f"""
+            DELETE FROM {tabela}
+            WHERE {pk} = :id
+        """)
 
         with engine.begin() as trans:
             trans.execute(query, {"id": id})
