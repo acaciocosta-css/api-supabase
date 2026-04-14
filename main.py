@@ -26,7 +26,7 @@ def listar_tabelas():
         """))
         return [row[0] for row in result]
 
-TABELAS_PERMITIDAS = ["clientes", "funcionarios", "pedidos"]
+TABELAS_PERMITIDAS = ["cad_projetos", "cad_canteiros", "cad_trechos"]
 
 @app.get("/{tabela}")
 def listar_dados(tabela: str):
