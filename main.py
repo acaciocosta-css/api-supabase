@@ -34,9 +34,9 @@ def validar_tabela(conn, tabela):
         raise HTTPException(status_code=404, detail="Tabela não existe")
 
 # ===============================
-# DESCOBRIR CHAVE PRIMÁRIA
+# DESCOBRIR PK
 # ===============================
-def get_primary_key(conn, tabela):
+def get_pk(conn, tabela):
     result = conn.execute(text("""
         SELECT kcu.column_name
         FROM information_schema.table_constraints tc
@@ -47,39 +47,79 @@ def get_primary_key(conn, tabela):
     """), {"tabela": tabela}).fetchone()
 
     if not result:
-        raise HTTPException(status_code=400, detail="Tabela sem chave primária")
+        raise HTTPException(status_code=400, detail="Tabela sem PK")
 
     return result[0]
 
 # ===============================
-# API GENÉRICA (UPSERT)
+# INSERT (POST)
 # ===============================
-@app.post("/api")
-def api_dinamica(payload: dict):
-
-    tabela = payload.get("tabela")
-    dados = payload.get("dados")
-
-    if not tabela or not dados:
-        raise HTTPException(status_code=400, detail="Payload inválido")
+@app.post("/{tabela}")
+def inserir(tabela: str, dados: dict):
 
     with engine.connect() as conn:
         validar_tabela(conn, tabela)
-        pk = get_primary_key(conn, tabela)
 
         colunas = ", ".join(dados.keys())
         valores = ", ".join([f":{k}" for k in dados.keys()])
 
-        update_set = ", ".join([f"{k}=EXCLUDED.{k}" for k in dados.keys()])
-
         query = text(f"""
             INSERT INTO {tabela} ({colunas})
             VALUES ({valores})
-            ON CONFLICT ({pk}) DO UPDATE SET
-            {update_set}
         """)
 
         with engine.begin() as trans:
             trans.execute(query, dados)
 
-    return {"status": "ok"}
+    return {"status": "inserido"}
+
+# ===============================
+# UPDATE (PUT)
+# ===============================
+@app.put("/{tabela}/{id}")
+def atualizar(tabela: str, id: str, dados: dict):
+
+    with engine.connect() as conn:
+        validar_tabela(conn, tabela)
+        pk = get_pk(conn, tabela)
+
+        update_set = ", ".join([f"{k}=:{k}" for k in dados.keys()])
+
+        dados[pk] = id
+
+        query = text(f"""
+            UPDATE {tabela}
+            SET {update_set}
+            WHERE {pk} = :{pk}
+        """)
+
+        with engine.begin() as trans:
+            result = trans.execute(query, dados)
+
+            if result.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Registro não encontrado")
+
+    return {"status": "atualizado"}
+
+# ===============================
+# DELETE
+# ===============================
+@app.delete("/{tabela}/{id}")
+def deletar(tabela: str, id: str):
+
+    with engine.connect() as conn:
+        validar_tabela(conn, tabela)
+        pk = get_pk(conn, tabela)
+
+        query = text(f"""
+            DELETE FROM {tabela}
+            WHERE {pk} = :id
+        """)
+
+        with engine.begin() as trans:
+            result = trans.execute(query, {"id": id})
+
+            if result.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Registro não encontrado")
+
+    return {"status": "deletado"}
